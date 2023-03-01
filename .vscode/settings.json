@@ -1,0 +1,11 @@
+{
+    "go.buildTags": "js,wasm",
+
+    // other
+    "[json]": {
+        "editor.defaultFormatter": "vscode.json-language-features",
+    },
+    "git.branchPrefix": "feat/",
+    "git.branchProtection": [ "master" ],
+    "git.branchProtectionPrompt": "alwaysPrompt",
+}
