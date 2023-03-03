@@ -7,66 +7,73 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"image/color/palette"
-	"image/draw"
 	"image/gif"
-	"image/png"
 	"log"
+	"math"
 	"syscall/js"
 )
 
-func encodeGif(this js.Value, args []js.Value) interface{} {
-	inImages := args[0]
-	delays := args[1]
-	disposals := args[2]
+// taken from stdlib's image/image.go (SubImage) and modified to account for
+// gif frame positions
+func Crop(p *image.Paletted, selection image.Rectangle) *image.Paletted {
+	intersection := p.Rect.Intersect(selection)
 
-	outImages := make([]*image.Paletted, 0)
-	delay := make([]int, 0)
-	disposal := make([]byte, 0)
-
-	// Plan9 palette doesn't include transparent colors
-	// so we use WebSafe and add transparent color
-	myPalette := append(palette.WebSafe, image.Transparent)
-	opts := gif.Options{
-		NumColors: 256,
-		Drawer:    draw.FloydSteinberg,
-	}
-
-	fmt.Println(inImages.Length())
-	for i := 0; i < inImages.Length(); i++ {
-		imgBytes := make([]byte, inImages.Index(i).Length())
-		js.CopyBytesToGo(imgBytes, inImages.Index(i))
-
-		reader := bytes.NewReader(imgBytes)
-		img, err := png.Decode(reader)
-		if err != nil {
-			log.Fatal(err)
+	if intersection.Empty() {
+		return &image.Paletted{
+			Palette: p.Palette,
 		}
-
-		b := img.Bounds()
-		pimg := image.NewPaletted(b, myPalette)
-		opts.Drawer.Draw(pimg, b, img, image.ZP)
-
-		outImages = append(outImages, pimg)
-		delay = append(delay, delays.Index(i).Int())
-		disposal = append(disposal, byte(disposals.Index(i).Int()))
 	}
 
-	outGif := &gif.GIF{
-		Image:           outImages,
-		Delay:           delay,
-		LoopCount:       0,
-		Disposal:        disposal,
-		BackgroundIndex: 0,
+	i := p.PixOffset(intersection.Min.X, intersection.Min.Y)
+	xMin := int(math.Round(float64(intersection.Min.X) - (float64(selection.Min.X))))
+	yMin := int(math.Round(float64(intersection.Min.Y) - (float64(selection.Min.Y))))
+	xMax := xMin + (intersection.Dx())
+	yMax := yMin + (intersection.Dy())
+	bounds := image.Rect(xMin, yMin, xMax, yMax)
+
+	return &image.Paletted{
+		Pix:     p.Pix[i:],
+		Stride:  p.Stride,
+		Rect:    bounds,
+		Palette: p.Palette,
+	}
+}
+
+func encodeGif(this js.Value, args []js.Value) interface{} {
+	rawGifBytes := args[0]
+	x := args[1].Int()
+	y := args[2].Int()
+	w := args[3].Int()
+	h := args[4].Int()
+
+	gifBytes := make([]byte, rawGifBytes.Length())
+	js.CopyBytesToGo(gifBytes, rawGifBytes)
+	gifIn, err := gif.DecodeAll(bytes.NewReader(gifBytes))
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	for i := 0; i < len(gifIn.Image); i++ {
+		frame := gifIn.Image[i]
+		selection := image.Rect(x, y, x+w, y+h)
+		gifIn.Image[i] = Crop(frame, selection)
+	}
+
+	outGif := gif.GIF{
+		Image:           gifIn.Image,
+		Delay:           gifIn.Delay,
+		LoopCount:       gifIn.LoopCount,
+		Disposal:        gifIn.Disposal,
+		BackgroundIndex: gifIn.BackgroundIndex,
 	}
 
 	outBytes := new(bytes.Buffer)
-	err := gif.EncodeAll(outBytes, outGif)
+	err = gif.EncodeAll(outBytes, &outGif)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	return js.CopyBytesToJS(args[3], outBytes.Bytes())
+	return js.CopyBytesToJS(args[5], outBytes.Bytes())
 }
 
 func main() {
